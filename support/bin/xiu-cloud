@@ -1,0 +1,300 @@
+#!/bin/bash  
+#
+# *nix系统下的启动脚本,(windows下用 cygwin也可以使用)
+#
+# 配置文件
+#
+# /etc/default/appMonitor
+#   在启动的时候读取改配置文件,可以设置一些环境变量之类。
+#
+# $HOME/.appMonitorrc
+#   在启动的时候读取改配置文件,可以设置一些环境变量之类。
+#
+# 可配置变量
+#
+# JAVA_HOME
+#   java所在文件目录
+# JAVA
+#   java命令的位置，如果未设置，则使用 $JAVA_HOME/bin/java 进行执行
+#
+# JAVA_OPTIONS
+#   java虚拟机的配置参数
+#
+# SERVER_HOME
+#   服务器安装所在目录，如果未设置，脚本则自动寻找
+#   
+# SERVER_PORT
+#   服务器监听的端口，供外来连接使用
+#   
+# SERVER_ARGS
+#   服务器启动时候的运行，参数则直接传给java的main程序
+#
+
+usage()
+{
+    echo "Usage: $0 {start|stop|restart|check} [ parameter ... ] "
+    exit 1
+}
+
+[ $# -gt 0 ] || usage
+
+##################################################
+# 私有变量部分
+##################################################
+SERVER_FLAG="xiuCloud"
+SERVER_MESSAGE="Cloud Server"
+SERVER_DAEMON_PID=xiuCloud.pid
+SERVER_MAIN=com.shen.cloud.app.ZkCloud
+
+##################################################
+# Some utility functions,在stop中调用了。
+##################################################
+running()
+{
+    [ -f $1 ] || return 1
+    PID=$(cat $1)
+    ps -p $PID >/dev/null 2>/dev/null || return 1
+    return 0
+}
+
+##################################################
+# Get the action & configs
+##################################################
+
+ACTION=$1
+shift
+SERVER_ARGS="$*"
+CONFIGS=""
+NO_START=0
+TMP=/tmp
+
+##################################################
+# 加载默认配置文件
+if [ -f /etc/default/$SERVER_FLAG ] ; then
+  . /etc/default/$SERVER_FLAG
+fi
+##################################################
+# 加载用户自定义配置
+if [ -f $HOME/.${SERVER_FLAG}rc ] ; then 
+  . $HOME/.${SERVER_FLAG}rc
+fi
+##################################################
+# 确认安装成功
+SERVER_INSTALL_TRACE_FILE="doc/README.txt"
+TMPJ=$TMP/j$$
+##################################################
+# 解析SERVER_HOME
+##################################################
+if [ -z "$SERVER_HOME" ] 
+then
+    ## resolve links - $0 may be a link to server's home
+    PRG="$0"
+    # need this for relative symlinks
+    SERVER_HOME_1=`dirname "$PRG"`/..
+ if [ -f "${SERVER_HOME_1}/$SERVER_INSTALL_TRACE_FILE" ] ; 
+  then 
+     SERVER_HOME=${SERVER_HOME_1} 
+  fi
+fi
+##################################################
+# No SERVER_HOME yet? We're out of luck!
+if [ -z "$SERVER_HOME" ] ; then
+    echo "** ERROR: SERVER_HOME 变量未设置，你需要手工设置，或者从标准安装启动"
+    exit 1
+fi
+
+cd $SERVER_HOME
+SERVER_HOME=`pwd`
+#####################################################
+# 检测是否正确
+if [ ! -r $SERVER_HOME/$SERVER_INSTALL_TRACE_FILE ] 
+then
+   echo "** ERROR: Oops! $SERVER_FLAG doesn't appear to be installed in $SERVER_HOME"
+   echo "** ERROR:  $SERVER_HOME/$SERVER_INSTALL_TRACE_FILE is not readable!"
+   exit 1
+fi
+#####################################################
+# Find a location for the pid file
+if [  -z "$SERVER_RUN" ] 
+then
+    SERVER_RUN=${SERVER_HOME}/var
+    # 服务器运行目录
+    if [ ! -d "$SERVER_RUN" ]
+    then
+        mkdir -p $SERVER_RUN
+    fi
+fi
+#####################################################
+# Find a PID for the pid file
+if [  -z "$SERVER_DAEMON_PID" ] 
+then
+   echo "** ERROR: Oops! unset SERVER_DAEMON_PID"
+   exit 1
+fi
+SERVER_PID=$SERVER_RUN/$SERVER_DAEMON_PID
+#####################################################
+# Find a server main class
+if [  -z "$SERVER_MAIN" ] 
+then
+   echo "** ERROR: Oops! unset SERVER_MAIN"
+   exit 1
+fi
+#####################################################
+# Find server message
+#####################################################
+if [  -z "$SERVER_MESSAGE" ] 
+then
+    SERVER_MESSAGE="app server"
+fi
+##################################################
+# Determine which JVM of version >1.2
+# Try to use JAVA_HOME
+##################################################
+if [ "$JAVA" = "" -a "$JAVA_HOME" != "" ]
+then
+  if [ ! -z "$JAVACMD" ] 
+  then
+     JAVA="$JAVACMD" 
+  else
+    [ -x $JAVA_HOME/bin/jre -a ! -d $JAVA_HOME/bin/jre ] && JAVA=$JAVA_HOME/bin/jre
+    [ -x $JAVA_HOME/bin/java -a ! -d $JAVA_HOME/bin/java ] && JAVA=$JAVA_HOME/bin/java
+  fi
+fi
+
+if [ "$JAVA" = "" ]
+then
+    echo "Cannot find a JRE or JDK. Please set JAVA_HOME to a >=1.2 JRE" 2>&2
+    exit 1
+fi
+
+JAVA_VERSION=`expr "$($JAVA -version 2>&1 | head -1)" : '.*1\.\([0-9]\)'`
+
+#####################################################
+# See if server env  is defined
+#####################################################
+if [ "$SERVER_PORT" = "" ]
+then
+  SERVER_PORT="9080"
+fi
+
+JAVA_OPTIONS="$JAVA_OPTIONS $SERVER_JAVA_OPTIONS  \
+    -Dserver.port=$SERVER_PORT \
+    -Dserver.home=$SERVER_HOME \
+    -Dfile.encoding=utf-8 "
+#####################################################
+# Are we running on Windows? Could be, with Cygwin/NT.
+#####################################################
+case "`uname`" in
+CYGWIN*) PATH_SEPARATOR=";";;
+*) PATH_SEPARATOR=":";;
+esac
+#####################################################
+# Add properties to Java VM options.
+#####################################################
+#创建java使用的临时文件夹
+if [ ! -d "$SERVER_HOME/var/tmp" ]
+then
+    mkdir -p $SERVER_HOME/var/tmp
+fi
+JAVA_OPTIONS="$JAVA_OPTIONS  -Djava.io.tmpdir=$SERVER_HOME/var/tmp"
+#####################################################
+# 寻找jar类库
+#####################################################
+HOME_LIB=$SERVER_HOME/lib
+for jar in `ls $HOME_LIB/*.jar`
+do
+    SERVER_CP="$SERVER_CP:""$jar"
+done
+
+
+RUN_ARGS="$JAVA_OPTIONS -cp $SERVER_CP $SERVER_MAIN $SERVER_ARGS "
+RUN_CMD="$JAVA $RUN_ARGS"
+
+#####################################################
+# Comment these out after you're happy with what 
+# the script is doing.
+#####################################################
+echo "SERVER_HOME = $SERVER_HOME"
+#echo "SERVER_RUN        =  $SERVER_RUN"
+#echo "SERVER_ARGS        =  $SERVER_ARGS"
+echo "JAVA       = $JAVA"
+#echo "SERVER_PID         =  $SERVER_PID"
+#echo "SERVER_LOG_DIR     =  $SERVER_LOG_DIR"
+#echo "SERVER_CONFIG_DIR  =  $SERVER_CONFIG_DIR"
+#echo "JAVA_OPTIONS      =  $JAVA_OPTIONS"
+
+
+##################################################
+# Do the action
+##################################################
+case "$ACTION" in
+  start)
+      echo -n "Starting $SERVER_MESSAGE .......... "
+
+      if [ -f $SERVER_PID ]
+      then
+          echo "Already Running!!"
+          exit 1
+      fi
+
+      $RUN_CMD &
+      PID=$!
+      disown $PID
+      echo $PID > $SERVER_PID
+
+      echo "STARTED $SERVER_FLAG `date`"
+
+      ;;
+
+  stop)
+      echo -n "Stopping $SERVER_MESSAGE ........ "
+      PID=`cat $SERVER_PID 2>/dev/null`
+      TIMEOUT=30
+	  #调用最开始定义的running函数。
+      while running $SERVER_PID && [ $TIMEOUT -gt 0 ]
+      do
+          kill $PID 2>/dev/null
+          sleep 1
+          let TIMEOUT=$TIMEOUT-1
+      done
+
+      [ $TIMEOUT -gt 0 ] || kill -9 $PID 2>/dev/null
+          rm -f $SERVER_PID
+          echo OK
+      ;;
+
+  restart)
+        SERVER_SH=$0
+        echo $SERVER_SH
+        $SERVER_SH stop $*
+        sleep 5
+        $SERVER_SH start $*
+      ;;
+
+  check)
+        echo "Checking arguments to $SERVER_MESSAGE: "
+        echo "SERVER_HOME        =  $SERVER_HOME"
+        echo "SERVER_RUN         =  $SERVER_RUN"
+        echo "SERVER_PID         =  $SERVER_PID"             
+        echo "SERVER_LOG_DIR     =  $SERVER_LOG_DIR"
+        echo "SERVER_CONFIG_DIR  =  $SERVER_CONFIG_DIR"
+        echo "JAVA_OPTIONS      =  $JAVA_OPTIONS"
+        echo "JAVA              =  $JAVA"
+        echo "CLASSPATH         =  $CLASSPATH"
+        echo "RUN_CMD           =  $RUN_CMD"
+        echo
+        
+        if [ -f $SERVER_PID ]
+        then
+            echo "$SERVER_FLAG running pid="`cat $SERVER_PID`
+            exit 0
+        fi
+        exit 1
+        ;;
+
+*)
+        usage
+	;;
+esac
+
+exit 0

@@ -1,0 +1,25 @@
+appMonitor安装
+
+1) 拷贝 app-monitor-xxx.tar.gz 到服务器
+
+2) 解压缩节点程序
+    tar zxvf app-monitor-xxx.tar.gz
+
+3) 创建配置文件
+    cp config/app-monitor.xml.example config/app-monitor.xml
+
+4) 修改配置文件
+	根据自定义app-monitor.xml中的配置
+
+5) 调整启动参数
+    创建 ~/.webrc 文件，内容如下：
+
+    SERVER_PORT=9086
+    JAVA_OPTIONS="-Xmx1g  -XX:SurvivorRatio=3  -XX:+UseConcMarkSweepGC -XX:+UseParNewGC -XX:+CMSIncrementalMode -Doracle.jdbc.V8Compatible=true"
+
+    注意上面的JAVA_OPTIONS的内容在一行中，配置中的内存大小为1g,应该根据实际情况进行调整
+
+6) 启动数据同步服务器
+    bin/app-monitor start
+
+    在log文件下产生app-monitor.log,检查日志是否启动正常
